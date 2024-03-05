@@ -11,6 +11,13 @@ def upgrade():
     del reader
 
 
+def cal_len(txt):
+    len_txt = len(str(txt))
+    len_utf8 = len(str(txt).encode('utf-8'))
+    size = int((len_utf8 - len_txt) / 2 + len_txt)
+    return size
+
+
 get_record = """SELECT level,music_id,score_max FROM chusan_user_music_detail"""
 
 create = """CREATE TABLE user_music_detail (
@@ -26,10 +33,9 @@ create_result = """CREATE TABLE result (
     music_name varchar(30) not null,
     music_level integer,
     level_name varchar(10),
-    music_rate integer,
-    music_rate_decimal integer,
+    music_rate float,
     score_max integer,
-    rate float,
+    rating float,
     primary key(music_level,music_id)
 );
 """
@@ -42,8 +48,7 @@ insert_result = """INSERT into result(  music_id,
                                         music_name,
                                         level_name,
                                         music_rate,
-                                        music_rate_decimal,
-                                        rate) values(?,?,?,?,?,?,?,0);"""
+                                        rating) values(?,?,?,?,?,?,0);"""
 
 get_result = """SELECT *
 FROM user_music_detail 
@@ -52,7 +57,7 @@ ON user_music_detail.music_id=music_detail.music_id
 AND user_music_detail.music_level=music_detail.music_level
 """
 
-update = """update result set rate=? where (music_id,music_level)=(?,?); """
+update = """update result set rating=? where (music_id,music_level)=(?,?); """
 
 if __name__ == "__main__":
 
@@ -74,10 +79,19 @@ if __name__ == "__main__":
                         "-u",
                         help="to upgrade music level database",
                         action='store_true')
+    parser.add_argument("--best",
+                        "-b",
+                        help="show the number of best record you play",
+                        type=int,
+                        default=30)
     args = parser.parse_args()
     if args.upgrade:
         upgrade()
         exit(1)
+
+    shownumber = 30
+    if args.best:
+        shownumber = args.best
 
     conf = configparser.ConfigParser()
     conf.read(".\\config.cfg")
@@ -92,6 +106,7 @@ if __name__ == "__main__":
     os.chdir(dir)
     conn = sqlite3.connect(".\\music_level.sqlite")
     cur = conn.cursor()
+
     try:
         cur.execute(create)
     except Exception as e:
@@ -100,6 +115,8 @@ if __name__ == "__main__":
         else:
             print(e)
     cur.execute("DELETE FROM user_music_detail;")
+
+    cur.executemany(insert, record.fetchall())
 
     try:
         cur.execute(create_result)
@@ -110,24 +127,44 @@ if __name__ == "__main__":
             print(e)
     cur.execute("DELETE FROM result;")
 
-    cur.executemany(insert, record.fetchall())
     conn.commit()
     curDB.close()
     connDB.close()
+
+    #select datalist:(music_id,
+    # music_level,
+    # score_max,
+    # music_id,
+    # music_name,
+    # music_level,
+    # level_name,
+    # music_rate,
+    # music_rate_decimal)
+
+    #insert datalist:(music_id,
+    # music_level,
+    # score_max,
+    # music_name,
+    # level_name,
+    # music_rate,
+    # )
 
     result = cur.execute(get_result)
     for Result in result.fetchall():
         cur.executemany(insert_result,
                         [(Result[0], Result[1], Result[2], Result[4],
-                          Result[6], Result[7], Result[8])])
+                          Result[6], Result[7] + Result[8] / 100.0)])
     conn.commit()
 
-    temp = cur.execute("SELECT * FROM result")
+    temp = cur.execute("""SELECT music_id,
+                                music_level,
+                                score_max,
+                                music_rate FROM result""")
     for row in temp.fetchall():
-        rate_0 = row[4] + row[5] / 100.0
-        score = row[6]
+        rate_0 = row[3]
+        score = row[2]
         music_id = row[0]
-        music_level = row[2]
+        music_level = row[1]
         if score > 100_9000:
             rate_fin = rate_0 + 2.15
         elif score > 100_7500:
@@ -148,13 +185,43 @@ if __name__ == "__main__":
         cur.executemany(update, [(rate_fin, music_id, music_level)])
     conn.commit()
 
-    temp = cur.execute(
-        "SELECT music_name,level_name,music_rate+music_rate_decimal/100.0,score_max,rate FROM result ORDER BY rate DESC"
+    #print result
+    sel = cur.execute(
+        "SELECT music_name,level_name,music_rate,score_max,rating FROM result ORDER BY rating DESC"
     )
-    for i in range(30):
-        print(i + 1, temp.fetchone())
+
+        # get print width of result
+    widths = [0, 8, 4, 7, 7]
+    for i in range(shownumber):
+        temp = sel.fetchone()
+        if not i:
+            for j in range(5):
+                widths[j] = cal_len(str(temp[j]))
+        else:
+            for j in range(5):
+                widths[j] = max(cal_len(str(temp[j])), widths[j])
+
+    sel = cur.execute(
+        "SELECT music_name,level_name,music_rate,score_max,rating FROM result ORDER BY rating DESC"
+    )
+
+        # print head
+    head=['No.','song','level','rate','score','rating']
+    print('{0:^4}'.format(head[0]), end='\t')
+    for i in range(5):
+        print('{0:^{width}}'.format((head[i+1]),width=widths[i]),end='\t')
+    print()
+
+        # print consulting result
+    for i in range(shownumber):
+        print('{0:^4}'.format(i + 1), end='\t')
+        temp = sel.fetchone()
+        for j in range(5):
+            print('{0:^{width}}'.format(temp[j],
+                                        width=widths[j] -
+                                        (cal_len(str(temp[j])) - len(str(temp[j])))),
+                  end='\t')
+        print()
 
     cur.close()
     conn.close()
-
-
